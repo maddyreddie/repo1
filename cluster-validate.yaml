@@ -1,0 +1,77 @@
+---
+- name: Delete project if it exists
+  k8s:
+    name: cluster-validation
+    api_version: v1
+    kind: Namespace
+    state: absent
+
+- name: Wait till project deleted
+  pause:
+    minutes: 1    
+
+- name: Create a Project
+  k8s:
+    name: cluster-validation
+    api_version: v1
+    kind: Namespace
+    state: present
+
+- name: Create new-app in the project
+  command: "{{ oc }} new-app --template=httpd-example -n cluster-validation"
+
+- name: Wait unit build completed
+  k8s:
+    kind: "Build"
+    namespace: cluster-validation
+    api_version: "build.openshift.io/v1"
+    name: httpd-example-1
+  register: build_status
+  retries: 20
+  delay: 15
+  until: build_status.result.status.phase == 'Complete'  
+
+- name: Wait 30 seconds to finish pod's deployment
+  pause:
+    seconds: 30
+
+- name: Search for all pods labelled deploymentconfig=httpd-example and with state Running
+  k8s_facts:
+    kind: Pod
+    namespace: cluster-validation
+    label_selectors:
+    - deploymentconfig=httpd-example
+    field_selectors:
+      - status.phase=Running
+  register: pod_list
+  retries: 20
+  delay: 15
+  until: pod_list.resources[0].status.phase == 'Running'    
+- name: Get a list of all service objects
+  k8s_facts:
+      api_version: v1
+        kind: namespace
+        namespace: test
+        register: service_list
+
+- name: Search for route (URL)
+  k8s:
+    kind: "Route"
+    namespace: cluster-validation
+    api_version: "route.openshift.io/v1"
+    name: httpd-example
+  register: route_status
+
+- name: Check if page returns a status 200 
+  uri:
+    url: "http://{{ route_status.result.spec.host }}"
+    return_content: yes
+  register: app_response
+  failed_when: "app_response.status != 200"
+
+- debug:
+    msg: "--=== Test completed - new project was created, application builded and deployed, router exposed and reachable ===--"
+
+
+
+
